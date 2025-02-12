@@ -3,8 +3,10 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Navbar from "./components/navbar";
 import Footer from "./components/footer";
 import Homepage from "./components/Homepage";
-import Loginpage from "./components/Loginpage"; 
+import Loginpage from "./components/Loginpage";
 import Candidateform from "./components/candidateform";
+import AdminDashboard from "./components/AdminDashboard"; // Import Admin Dashboard
+
 // Layout for pages with Navbar and Footer
 const MainLayout = ({ children }) => (
   <>
@@ -18,7 +20,7 @@ const App = () => {
   return (
     <Router>
       <Routes>
-        {/* Routes that include Navbar and Footer */}
+        {/* Routes with Navbar and Footer */}
         <Route
           path="/"
           element={
@@ -27,13 +29,24 @@ const App = () => {
             </MainLayout>
           }
         />
+        <Route
+          path="/candidateform"
+          element={
+            <MainLayout>
+              <Candidateform />
+            </MainLayout>
+          }
+        />
 
-        {/* Add other routes that should have Navbar and Footer here */}
-
-        {/* Route for Login (No Navbar or Footer) */}
+        {/* Routes without Navbar and Footer */}
         <Route path="/login" element={<Loginpage />} />
-        <Route path="/candidateform" element={<Candidateform/>}/>
-        <Route path="*" element={<div className="text-center text-xl p-10">404 - Page Not Found</div>} />
+        <Route path="/admindashboard" element={<AdminDashboard />} />
+
+        {/* 404 Route */}
+        <Route
+          path="*"
+          element={<div className="text-center text-xl p-10">404 - Page Not Found</div>}
+        />
       </Routes>
     </Router>
   );

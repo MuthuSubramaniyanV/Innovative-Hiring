@@ -1,13 +1,30 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom"; // Import for navigation
 import { AtSign, Lock, ArrowRight } from "lucide-react";
 
 const LoginPage = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const navigate = useNavigate(); // Initialize navigation
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    console.log("Logging in with:", { username, password });
+    
+    const response = await fetch("http://127.0.0.1:5000/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      // Redirect to Admin Dashboard on success
+      navigate("/admindashboard");
+    } else {
+      setError(data.message); // Show error message
+    }
   };
 
   return (
@@ -20,6 +37,7 @@ const LoginPage = () => {
           </div>
 
           <div className="p-8">
+            {error && <p className="text-red-500 text-center mb-4">{error}</p>}
             <form onSubmit={handleLogin} className="space-y-6">
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -63,13 +81,6 @@ const LoginPage = () => {
                 <ArrowRight className="h-5 w-5" />
               </button>
             </form>
-
-            <p className="mt-8 text-center text-sm text-gray-600">
-              Don't have an account?{" "}
-              <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
-                Create one now
-              </a>
-            </p>
           </div>
         </div>
       </div>
