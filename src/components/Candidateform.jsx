@@ -1,93 +1,147 @@
 import React, { useState } from "react";
-import { User, Mail, FileText, Phone, Briefcase, Calendar } from "lucide-react";
+import { User, Mail, Phone, FileText } from "lucide-react";
+import axios from "axios";
+import toast, { Toaster } from "react-hot-toast";
 
 const CandidateForm = () => {
-  const handleSubmit = (e) => {
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    resume: null,
+  });
+  const [loading, setLoading] = useState(false);
+
+  const allowedFileTypes = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/png", "image/jpeg"];
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file && allowedFileTypes.includes(file.type)) {
+      setFormData({ ...formData, resume: file });
+    } else {
+      toast.error("Invalid file type. Upload PDF, DOCX, PNG, or JPG.");
+      e.target.value = "";
+    }
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Handle form submission
+    setLoading(true);
+
+    const formDataObj = new FormData();
+    formDataObj.append("name", formData.name);
+    formDataObj.append("email", formData.email);
+    formDataObj.append("phone", formData.phone);
+    if (formData.resume) {
+      formDataObj.append("resume", formData.resume);
+    }
+
+    try {
+      const loadingToast = toast.loading("Submitting application...");
+
+      const response = await axios.post("http://127.0.0.1:5001/submit", formDataObj, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 60000,
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          toast.loading(`Uploading: ${percentCompleted}%`, { id: loadingToast });
+        },
+      });
+
+      toast.dismiss(loadingToast);
+      toast.success(`Application submitted! Level: ${response.data.candidate_level}`);
+
+      setFormData({ name: "", email: "", phone: "", resume: null });
+      document.querySelector('input[type="file"]').value = "";
+    } catch (error) {
+      console.error("Submission error:", error);
+      toast.dismiss();
+      toast.error(error.response?.data?.error || "Error submitting application");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
-      <div className="max-w-3xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-          <div className="p-6 bg-gradient-to-r from-blue-600 to-indigo-600">
-            <h2 className="text-3xl font-bold text-white text-center">Job Application Form</h2>
-            <p className="text-blue-100 text-center mt-2">Fill in your details to apply</p>
-          </div>
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center px-6 py-12">
+      <Toaster position="top-right" />
+      <div className="text-center space-y-4">
+        <h1 className="text-4xl sm:text-6xl font-extrabold text-cyan-400 neon-glow">
+          Job Application Form
+        </h1>
+        <p className="text-lg sm:text-2xl text-gray-300">Fill in your details to apply</p>
+      </div>
 
-          <form onSubmit={handleSubmit} className="p-8 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Personal Information */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="text"
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Full Name"
-                  required
-                />
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Mail className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="email"
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Email Address"
-                  required
-                />
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Phone className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="tel"
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Phone Number"
-                  required
-                />
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Briefcase className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="text"
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Current Position"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Resume Upload */}
+      <div className="w-full max-w-3xl mt-8 p-8 bg-gray-800 rounded-2xl shadow-xl neon-border">
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <FileText className="h-5 w-5 text-gray-400" />
-              </div>
+              <User className="absolute left-4 top-3 h-5 w-5 text-cyan-400" />
               <input
-                type="url"
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Resume URL (Google Drive, Dropbox, etc.)"
+                type="text"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                placeholder="Full Name"
                 required
+                className="w-full pl-12 pr-4 py-3 border-2 border-gray-700 rounded-xl bg-gray-900 text-white focus:ring-2 focus:ring-cyan-400 focus:border-transparent"
               />
             </div>
-            <button
-              type="submit"
-              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-xl flex items-center justify-center gap-2 hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 shadow-lg hover:shadow-xl"
-            >
-              Submit Application
-            </button>
-          </form>
-        </div>
+
+            <div className="relative">
+              <Mail className="absolute left-4 top-3 h-5 w-5 text-cyan-400" />
+              <input
+                type="email"
+                name="email"
+                value={formData.email}
+                onChange={handleChange}
+                placeholder="Email Address"
+                required
+                className="w-full pl-12 pr-4 py-3 border-2 border-gray-700 rounded-xl bg-gray-900 text-white focus:ring-2 focus:ring-cyan-400 focus:border-transparent"
+              />
+            </div>
+
+            <div className="relative">
+              <Phone className="absolute left-4 top-3 h-5 w-5 text-cyan-400" />
+              <input
+                type="text"
+                name="phone"
+                value={formData.phone}
+                onChange={handleChange}
+                placeholder="Phone Number"
+                required
+                className="w-full pl-12 pr-4 py-3 border-2 border-gray-700 rounded-xl bg-gray-900 text-white focus:ring-2 focus:ring-cyan-400 focus:border-transparent"
+              />
+            </div>
+          </div>
+
+          <div className="relative">
+            <FileText className="absolute left-4 top-3 h-5 w-5 text-cyan-400" />
+            <input
+              type="file"
+              accept=".pdf, .docx, .png, .jpg"
+              onChange={handleFileChange}
+              required
+              className="w-full pl-12 pr-4 py-3 border-2 border-gray-700 rounded-xl bg-gray-900 text-white cursor-pointer"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className={`w-full py-3 rounded-xl font-semibold text-lg transition-all ${
+              loading
+                ? "bg-gray-500 cursor-not-allowed"
+                : "bg-gradient-to-r from-cyan-400 to-blue-500 text-gray-900 hover:from-blue-500 hover:to-cyan-400"
+            }`}
+          >
+            {loading ? "Submitting..." : "Submit Application"}
+          </button>
+        </form>
       </div>
     </div>
   );
