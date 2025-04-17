@@ -9,13 +9,17 @@ from datetime import datetime
 import random
 import string
 from datetime import datetime, timedelta
+from datetime import date
+import json
 
 app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
         "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": True
     }
 })
 
@@ -76,20 +80,19 @@ def send_otp_email(email, otp):
         print(f"Error sending OTP email: {e}")
         return False
 
-# Jobs routes
 @app.route('/jobs', methods=['GET'])
 def get_jobs():
     conn = get_db_connection()
     if conn is None:
         return jsonify({"error": "Database connection failed"}), 500
-    
+
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT post_id, title, description, minimum_experience, exam_type
+            SELECT post_id, title, description, minimum_experience, exam_type, application_deadline
             FROM post
-            WHERE status = 'active'
-        """)
+            WHERE status = 'active' AND (application_deadline IS NULL OR application_deadline >= %s)
+        """, (date.today(),))
 
         jobs = [
             {
@@ -97,7 +100,8 @@ def get_jobs():
                 "job_title": row[1],
                 "description": row[2],
                 "minimum_experience": row[3],
-                "exam_type": row[4]
+                "exam_type": row[4],
+                "application_deadline": row[5].strftime('%Y-%m-%d') if row[5] else None
             }
             for row in cur.fetchall()
         ]
@@ -108,6 +112,9 @@ def get_jobs():
     finally:
         cur.close()
         conn.close()
+
+
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -165,92 +172,8 @@ def login():
     finally:
         cursor.close()
         conn.close()
-@app.route('/panel/assigned-candidates', methods=['GET'])
-def get_assigned_candidates():
-    panel_id = request.args.get('id')
-    panel_id = int(panel_id)   
 
-    if not panel_id:
-        return jsonify({"message": "Panel ID is required", "status": "error"}), 400
-
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Verify panel member exists and is active
-        cursor.execute("""
-            SELECT id FROM users 
-            WHERE id = %s AND user_role = 'Panel' AND user_status = 'Activated'
-        """, (panel_id,))
-        panel_member = cursor.fetchone()
-
-        if not panel_member:
-            return jsonify({
-                "message": "Invalid or inactive panel member", 
-                "status": "error"
-            }), 403
-
-        # Fetch assigned candidates
-        query = """
-            SELECT 
-                
-                c.name,
-                c.email,
-                c.phone,
-                
-               
-                c.interview_performance,
-                c.interview_feedback,
-                c.interview_conversation,
-                c.progress,
-                c.selected,
-                c.candidate_level,
-                p.title AS job_title,
-                p.description AS job_description
-            FROM candidate c
-            LEFT JOIN post p ON c.job_id = p.post_id
-            WHERE c.assigned_panel = %s
-            ORDER BY c.applied_at DESC
-        """
-        cursor.execute(query, (panel_id,))
-        candidates = cursor.fetchall()
-
-        candidates_list = [
-    {
-        "name": row[0],  # name
-        "email": row[1],  # email
-        "phone": row[2],  # phone
-        "interview_performance": row[3],  # interview_performance
-        "interview_feedback": row[4],  # interview_feedback
-        "interview_conversation": row[5],  # interview_conversation
-        "progress": row[6],  # progress
-        "selected": row[7],  # selected
-        "candidate_level": row[8],  # candidate_level
-        "job_title": row[9],  # job_title
-        "job_description": row[10],  # job_description
-    }
-    for row in candidates
-]
-
-    
-
-        return jsonify({
-            "message": "Candidates fetched successfully", 
-            "candidates": candidates_list,
-            "total_count": len(candidates_list),
-            "status": "success"
-        }), 200
-
-    except Exception as e:
-        return jsonify({"message": str(e), "status": "error"}), 500
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-
+        
 # Email registration routes
 @app.route('/api/send-email', methods=['OPTIONS', 'POST'])
 def receive_email():
@@ -382,69 +305,26 @@ def create_user():
         msg["From"] = email_sender
         msg["To"] = email_receiver
 
+        # Send the email
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(email_sender, email_password)
             server.send_message(msg)
 
-        return jsonify({"success": True, "message": "User created successfully!"}), 200
+        return jsonify({
+            "success": True,
+            "message": "User created successfully and registration email sent",
+            "user_id": user_id[0]
+        }), 201
 
     except Exception as e:
-        print(f"Error: {str(e)}")
-        return jsonify({"success": False, "message": "An unexpected error occurred"}), 500
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-@app.route('/update-user-status', methods=['POST'])
-def update_user_status():
-    data = request.json
-    user_id = data.get("user_id")
-    new_status = data.get("status")
-
-    if not user_id or not new_status:
-        return jsonify({"message": "User ID and status are required", "success": False}), 400
-
-    # Validate status value
-    if new_status not in ['Activated', 'Deactivated']:
-        return jsonify({"message": "Invalid status value", "success": False}), 400
-
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"message": "Database connection failed", "success": False}), 500
-
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET user_status = %s::status WHERE id = %s RETURNING user_status",
-            (new_status, user_id)
-        )
-        updated_status = cursor.fetchone()
-        conn.commit()
-        
-        if updated_status:
-            return jsonify({
-                "message": f"User status updated to {updated_status[0]}", 
-                "success": True
-            })
-        else:
-            return jsonify({
-                "message": "User not found", 
-                "success": False
-            }), 404
-
-    except psycopg2.Error as e:
         if conn:
             conn.rollback()
+        print(f"Error creating user: {str(e)}")
         return jsonify({
-            "message": "Database error", 
-            "success": False, 
-            "error": str(e)
+            "success": False,
+            "message": f"Failed to create user: {str(e)}"
         }), 500
-
     finally:
         if cursor:
             cursor.close()
@@ -486,165 +366,7 @@ def get_users():
         if conn:
             conn.close()
 
-# Add these new routes after your existing routes
-@app.route('/api/panel/questions', methods=['GET'])
-def get_panel_questions():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"success": False, "message": "Database connection failed"}), 500
 
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, content, panel_type, created_at 
-            FROM panel_questions 
-            ORDER BY created_at DESC
-        """)
-        
-        questions = [
-            {
-                "id": row[0],
-                "content": row[1],
-                "panelType": row[2],
-                "createdAt": row[3].isoformat() if row[3] else None
-            }
-            for row in cursor.fetchall()
-        ]
-
-        return jsonify(questions)
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route('/api/panel/questions', methods=['POST'])
-def create_panel_question():
-    data = request.json
-    content = data.get('content')
-    panel_type = data.get('panelType')
-
-    if not content:
-        return jsonify({"success": False, "message": "Question content is required"}), 400
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"success": False, "message": "Database connection failed"}), 500
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO panel_questions (content, panel_type, created_at)
-            VALUES (%s, %s, NOW())
-            RETURNING id
-        """, (content, panel_type))
-        
-        question_id = cursor.fetchone()[0]
-        conn.commit()
-
-        return jsonify({
-            "success": True, 
-            "message": "Question created successfully",
-            "id": question_id
-        })
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route('/api/panel/questions/<int:id>', methods=['PUT'])
-def update_panel_question(id):
-    data = request.json
-    content = data.get('content')
-
-    if not content:
-        return jsonify({"success": False, "message": "Question content is required"}), 400
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"success": False, "message": "Database connection failed"}), 500
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE panel_questions 
-            SET content = %s, updated_at = NOW()
-            WHERE id = %s
-            RETURNING id
-        """, (content, id))
-        
-        if cursor.fetchone():
-            conn.commit()
-            return jsonify({"success": True, "message": "Question updated successfully"})
-        else:
-            return jsonify({"success": False, "message": "Question not found"}), 404
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route('/api/panel/questions/<int:id>', methods=['DELETE'])
-def delete_panel_question(id):
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"success": False, "message": "Database connection failed"}), 500
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM panel_questions WHERE id = %s RETURNING id", (id,))
-        
-        if cursor.fetchone():
-            conn.commit()
-            return jsonify({"success": True, "message": "Question deleted successfully"})
-        else:
-            return jsonify({"success": False, "message": "Question not found"}), 404
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route('/api/panel/tasks', methods=['GET'])
-def get_panel_tasks():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"success": False, "message": "Database connection failed"}), 500
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, description, status, created_at 
-            FROM panel_tasks 
-            WHERE status = 'active'
-            ORDER BY created_at DESC
-        """)
-        
-        tasks = [
-            {
-                "id": row[0],
-                "description": row[1],
-                "status": row[2],
-                "createdAt": row[3].isoformat() if row[3] else None
-            }
-            for row in cursor.fetchall()
-        ]
-
-        return jsonify(tasks)
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
 
 @app.route('/api/send-otp', methods=['OPTIONS', 'POST'])
 def send_otp():
@@ -692,27 +414,6 @@ def send_otp():
             cursor.close()
         if conn:
             conn.close()
-
-
-@app.route('/api/candidates', methods=['GET'])
-def get_candidates():
-    level = request.args.get('level', 'Beginner')  # Default to "Beginner"
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    query = "SELECT candidate_id, name, email, phone, candidate_level FROM candidate WHERE candidate_level = %s;"
-    cur.execute(query, (level,))
-    candidates = cur.fetchall()
-    
-    cur.close()
-    conn.close()
-    
-    result = [
-        {"candidate_id": row[0], "name": row[1], "email": row[2], "phone": row[3], "candidate_level": row[4]}
-        for row in candidates
-    ]
-    
-    return jsonify(result)
 
 
 @app.route('/api/verify-otp', methods=['POST'])
@@ -800,6 +501,598 @@ def reset_credentials():
             cursor.close()
         if conn:
             conn.close()
+
+  
+@app.route('/api/panel/tasks/<username>', methods=['GET'])
+def get_panel_tasks(username):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            WITH panel_tasks AS (
+                SELECT 
+                    p.post_id,
+                    p.title,
+                    p.description,
+                    p.category,
+                    p.exam_type,
+                    p.time,
+                    p.test_start_date,
+                    p.panel_id,
+                    p.status,
+                    p.coverage,
+                    p.followup,
+                    array_position(string_to_array(p.panel_id, ','), %s) as panel_position,
+                    CASE 
+                        WHEN array_position(string_to_array(p.panel_id, ','), %s) = 1 THEN 'Beginner'::candidate_level
+                        WHEN array_position(string_to_array(p.panel_id, ','), %s) = 2 THEN 'Intermediate'::candidate_level
+                        WHEN array_position(string_to_array(p.panel_id, ','), %s) = 3 THEN 'Advanced'::candidate_level
+                    END as expected_level
+                FROM post p 
+                WHERE p.panel_id LIKE %s
+                AND (p.status = 'active' OR p.status = 'pending')
+            ),
+            task_candidates AS (
+                SELECT 
+                    t.post_id,
+                    json_agg(
+                        json_build_object(
+                            'candidate_id', c.candidate_id,
+                            'name', c.name,
+                            'email', c.email,
+                            'candidate_level', c.candidate_level,
+                            'progress', c.progress,
+                            'selected', c.selected
+                        )
+                    ) FILTER (WHERE c.candidate_id IS NOT NULL) as candidates
+                FROM panel_tasks t
+                LEFT JOIN candidate c ON c.job_id = t.post_id 
+                    AND c.candidate_level = t.expected_level
+                GROUP BY t.post_id
+            )
+            SELECT 
+                t.*,
+                COALESCE(tc.candidates, '[]') as candidates
+            FROM panel_tasks t
+            LEFT JOIN task_candidates tc ON t.post_id = tc.post_id
+            ORDER BY t.panel_position;
+        """, (username, username, username, username, f'%{username}%'))
+
+        tasks = []
+        for row in cursor.fetchall():
+            task = {
+                'id': row[0],
+                'title': row[1],
+                'description': row[2],
+                'category': row[3],
+                'type': row[4],
+                'time': row[5],
+                'test_start_date': row[6].strftime('%Y-%m-%d') if row[6] else None,
+                'panel_id': row[7],
+                'status': row[8] or 'Pending',
+                'coverage': row[9],
+                'followup': row[10],
+                'panel_position': row[11],
+                'expected_level': row[12],
+                'candidates': row[13],
+                'levelIndicator': (
+                    'Beginner Level' if row[11] == 1 else
+                    'Intermediate Level' if row[11] == 2 else
+                    'Advanced Level' if row[11] == 3 else ''
+                )
+            }
+            tasks.append(task)
+
+        return jsonify({
+            "status": "success",
+            "tasks": tasks
+        }), 200
+
+    except Exception as e:
+        print(f"Error fetching tasks: {str(e)}")
+        return jsonify({
+            "status": "error", 
+            "message": f"Failed to fetch tasks: {str(e)}"
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/panel/notify-hr', methods=['POST'])
+def notify_hr():
+    try:
+        data = request.json
+        question_id = data.get('questionId')
+        
+        if not question_id:
+            return jsonify({
+                "status": "error",
+                "message": "Question ID is required"
+            }), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Update notify status to true
+        cursor.execute("""
+            UPDATE question 
+            SET notify = true 
+            WHERE question_id = %s 
+            RETURNING question_id, question_title, notify
+        """, (question_id,))
+        
+        updated = cursor.fetchone()
+        conn.commit()
+
+        if updated:
+            return jsonify({
+                "status": "success",
+                "message": "HR has been notified",
+                "question": {
+                    "id": updated[0],
+                    "title": updated[1],
+                    "notify": updated[2]
+                }
+            }), 200
+        
+        return jsonify({
+            "status": "error",
+            "message": "Question not found"
+        }), 404
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/panel/delete-question/<int:question_id>', methods=['DELETE'])
+def delete_question(question_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # First check if question exists and if it's notified
+        cursor.execute("""
+            SELECT notify 
+            FROM question 
+            WHERE question_id = %s
+        """, (question_id,))
+        
+        question = cursor.fetchone()
+        
+        if not question:
+            return jsonify({
+                "status": "error",
+                "message": "Question not found"
+            }), 404
+            
+        if question[0]:  # if notify is True
+            return jsonify({
+                "status": "error",
+                "message": "Cannot delete question that has been notified to HR"
+            }), 403
+
+        # Delete the question
+        cursor.execute("""
+            DELETE FROM question 
+            WHERE question_id = %s 
+            AND notify = false
+        """, (question_id,))
+        
+        conn.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": "Question deleted successfully"
+        }), 200
+
+    except Exception as e:
+        print(f"Error deleting question: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/questions/<question_type>', methods=['GET'])
+def get_questions_by_type(question_type):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        username = request.args.get('username')
+        if not username:
+            return jsonify({
+                "status": "error",
+                "message": "Username is required"
+            }), 400
+
+        valid_types = ['MCQ', 'Interview', 'ALL']
+        normalized_type = question_type.upper() if question_type.lower() == 'all' or question_type.upper() == 'MCQ' else question_type.capitalize()
+
+        if normalized_type not in valid_types:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid question type"
+            }), 400
+
+        if normalized_type == 'ALL':
+            query = """
+                SELECT question_id, question_title, questions, exam_type, notify, created_by
+                FROM question
+                WHERE created_by = %s
+                ORDER BY question_id DESC
+            """
+            cursor.execute(query, (username,))
+        else:
+            query = """
+                SELECT question_id, question_title, questions, exam_type, notify, created_by
+                FROM question
+                WHERE exam_type = %s::exam_type AND created_by = %s
+                ORDER BY question_id DESC
+            """
+            cursor.execute(query, (normalized_type, username))
+
+        questions = [{
+            'question_id': row[0],
+            'question_title': row[1],
+            'questions': row[2],
+            'exam_type': row[3],
+            'notify': row[4],
+            'created_by': row[5]
+        } for row in cursor.fetchall()]
+
+        return jsonify({
+            "status": "success",
+            "questions": questions
+        }), 200
+
+    except Exception as e:
+        print(f"Error fetching questions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/questions', methods=['GET', 'OPTIONS'])
+def get_questions():
+    if request.method == "OPTIONS":
+        return "", 200
+        
+    try:
+        username = request.args.get('username')
+        if not username:
+            return jsonify({
+                "status": "error",
+                "message": "Username is required"
+            }), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get questions created by the specified user
+        cursor.execute("""
+            SELECT 
+                question_id, 
+                question_title, 
+                questions, 
+                exam_type, 
+                notify,
+                created_by
+            FROM question
+            WHERE created_by = %s
+            ORDER BY question_id DESC
+        """, (username,))
+        
+        questions = [{
+            'question_id': row[0],
+            'question_title': row[1],
+            'questions': row[2],
+            'exam_type': row[3],
+            'notify': row[4],
+            'created_by': row[5]
+        } for row in cursor.fetchall()]
+
+        return jsonify({
+            "status": "success",
+            "questions": questions
+        }), 200
+
+    except Exception as e:
+        print(f"Error fetching questions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/hiring-questions', methods=['GET'])
+def get_hiring_questions():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT 
+                q.question_id,
+                q.question_title,
+                q.questions,
+                q.exam_type,
+                q.notify,
+                q.job_id,
+                p.title as job_title,
+                p.test_start_date,
+                COALESCE(
+                    json_agg(
+                        json_build_object(
+                            'candidate_id', c.candidate_id,
+                            'name', c.name,
+                            'email', c.email,
+                            'level', c.candidate_level,
+                            'progress', c.progress
+                        )
+                    ) FILTER (WHERE c.candidate_id IS NOT NULL),
+                    '[]'
+                ) as candidates
+            FROM question q
+            LEFT JOIN post p ON q.job_id = p.post_id
+            LEFT JOIN candidate c ON p.post_id = c.job_id
+            GROUP BY 
+                q.question_id, 
+                q.question_title,
+                q.questions,
+                q.exam_type,
+                q.notify,
+                q.job_id,
+                p.title,
+                p.test_start_date
+            ORDER BY q.question_id DESC
+        """)
+
+        questions = []
+        for row in cursor.fetchall():
+            questions.append({
+                "question_id": row[0],
+                "question_title": row[1],
+                "questions": row[2],
+                "exam_type": row[3],
+                "notify": row[4],
+                "job_id": row[5],
+                "job_title": row[6],
+                "test_start_date": row[7].strftime('%Y-%m-%d') if row[7] else None,
+                "candidates": row[8]
+            })
+
+        return jsonify({
+            "status": "success",
+            "questions": questions
+        }), 200
+
+    except Exception as e:
+        print(f"Error fetching questions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/panel/save-questions', methods=['POST'])
+def save_panel_questions():
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['question_title', 'questions', 'exam_type', 'created_by', 'task_id']
+        if not all(field in data for field in required_fields):
+            return jsonify({
+                "status": "error",
+                "message": "Missing required fields: question_title, questions, exam_type, created_by, or task_id"
+            }), 400
+
+        # Validate questions format
+        questions = data['questions']
+        if not isinstance(questions, list):
+            return jsonify({
+                "status": "error",
+                "message": "Questions must be a list"
+            }), 400
+
+        # Validate each question
+        for q in questions:
+            if not isinstance(q, dict):
+                return jsonify({
+                    "status": "error",
+                    "message": "Each question must be an object"
+                }), 400
+            
+            if 'question' not in q or 'expected_answer' not in q:
+                return jsonify({
+                    "status": "error",
+                    "message": "Each question must have 'question' and 'expected_answer' fields"
+                }), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Insert question with job_id
+        cursor.execute("""
+            INSERT INTO question 
+            (question_title, questions, exam_type, notify, created_by, job_id) 
+            VALUES (%s, %s, %s::exam_type, false, %s, %s)
+            RETURNING question_id
+        """, (
+            data['question_title'],
+            json.dumps(questions),
+            data['exam_type'],
+            data['created_by'],
+            data['task_id']
+        ))
+
+        question_id = cursor.fetchone()[0]
+        conn.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": "Questions saved successfully",
+            "question_id": question_id
+        }), 201
+
+    except Exception as e:
+        print(f"Error saving questions: {str(e)}")
+        if conn:
+            conn.rollback()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/save-selected-questions', methods=['POST'])
+def save_selected_questions():
+    try:
+        data = request.json
+        file_name = data.get('file_name')
+        questions = data.get('questions')
+        created_by = data.get('created_by')  # Add this line
+
+        if not all([file_name, questions, created_by]):  # Update validation
+            return jsonify({
+                "status": "error",
+                "message": "Missing required fields (file_name, questions, or created_by)"
+            }), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Update query to include created_by
+        cursor.execute("""
+            INSERT INTO question 
+            (question_title, questions, exam_type, notify, created_by) 
+            VALUES (%s, %s, 'MCQ', false, %s)
+            RETURNING question_id, created_by
+        """, (file_name, json.dumps(questions), created_by))
+        
+        result = cursor.fetchone()
+        conn.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": "Questions saved successfully",
+            "question_id": result[0],
+            "created_by": result[1]
+        }), 201
+
+    except Exception as e:
+        print(f"Error saving selected questions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/hr/start-test', methods=['POST', 'OPTIONS'])
+def start_test():
+    if request.method == 'OPTIONS':
+        return {
+            'Allow': 'POST, OPTIONS',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+        }, 200
+
+    try:
+        data = request.get_json()
+        question_id = data.get('questionId')
+        candidates = data.get('candidates')
+
+        if not question_id or not candidates:
+            return jsonify({
+                "status": "error",
+                "message": "Question ID and candidates are required"
+            }), 400
+
+        # Send emails to candidates
+        email_sender = 'innovativehiring032@gmail.com'
+        email_password = os.getenv('EMAIL_PASSWORD', 'gyyj zcta jsxs fmdt')
+        emails_sent = 0
+
+        for candidate in candidates:
+            try:
+                # Create email message
+                msg = EmailMessage()
+                msg.set_content(f"""
+                Dear {candidate['name']},
+                
+                Congratulations.You have been selected for the test. Please click the link below to start your test:
+                
+                Test Link: http://localhost:5173/test
+
+                Best regards,
+                Innovative Hiring Team
+                """)
+
+                msg["Subject"] = "Test Invitation"
+                msg["From"] = email_sender
+                msg["To"] = candidate['email']
+
+                # Send email
+                context = ssl.create_default_context()
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+                    server.login(email_sender, email_password)
+                    server.send_message(msg)
+                
+                emails_sent += 1
+                print(f"Email sent to {candidate['email']}")
+
+            except Exception as e:
+                print(f"Error sending email to {candidate['email']}: {str(e)}")
+                continue
+
+        if emails_sent > 0:
+            return jsonify({
+                "status": "success",
+                "message": f"Test invitation sent to {emails_sent} candidates"
+            }), 200
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Failed to send emails to any candidates"
+            }), 500
+
+    except Exception as e:
+        print(f"Error in start_test: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

@@ -3,6 +3,7 @@ import json
 import logging
 import traceback
 import random
+import re
 
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -19,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Get API key from environment variable
-API_KEY = "AIzaSyDwCkQoGaNCPUoZBB_-E-0KWlVphHBvSAs"
+API_KEY = "AIzaSyCsOfL5IMZKu3-EGHzWHrKDOgqN9QvBdoI"
 
 # Initialize Google AI
 try:
@@ -274,7 +275,6 @@ def retry_with_backoff(retries=3, backoff_in_seconds=1):
         return wrapper
     return decorator
 
-@retry_with_backoff(retries=3, backoff_in_seconds=2)
 def generate_interview_questions(prompt, num_questions):
     try:
         # Ensure num_questions is within the allowed range (10-15)
@@ -289,36 +289,26 @@ def generate_interview_questions(prompt, num_questions):
         ]).strip()
 
         prompt_template = f"""
-        Create exactly {num_questions} interview questions about {clean_prompt}.
-        
-        Rules:
-        1. Questions should be suitable for technical interviews
-        2. Include both theoretical and practical questions
-        3. Return a valid JSON array with this exact format:
-        
-        [
-          {{
-            "id": 1,
-            "question": "Technical question about {clean_prompt}?",
-            "answer": "Detailed explanation covering key points with examples:
-            
-            1. Key concept explanation
-            2. Code example if applicable
-            3. Best practices
-            4. Common pitfalls to avoid",
-            "difficulty": "beginner",
-            "type": "theoretical",
-            "topic": "{clean_prompt}"
-          }}
-        ]
+Create exactly {num_questions} technical interview questions about {clean_prompt}.
 
-        Important:
-        - Generate exactly {num_questions} questions
-        - Use proper JSON escaping for quotes
-        - Include markdown formatting in answers for better readability
-        - Provide detailed answers with examples
-        - Keep difficulty at beginner level
-        """
+IMPORTANT: Return ONLY a valid JSON array with this exact format, nothing else:
+[
+  {{
+    "id": 1,
+    "question": "Technical question about {clean_prompt}?",
+    "answer": "Detailed explanation with: 1. Key concepts, 2. Examples, 3. Best practices",
+    "difficulty": "beginner",
+    "type": "theoretical"
+  }}
+]
+
+Rules:
+- Return only valid JSON, no other text
+- Generate exactly {num_questions} questions
+- Include both theoretical and practical questions
+- Keep answers clear and concise
+- Use proper JSON escaping for quotes
+"""
 
         generation_config = {
             "temperature": 0.7,
@@ -335,15 +325,15 @@ def generate_interview_questions(prompt, num_questions):
         response_text = get_response_content(response)
         if not response_text:
             raise ValueError("Empty response from AI model")
+        
+        logger.debug(f"Raw interview questions response:\n{response_text[:500]}...")
 
-        # Clean and parse response
-        response_text = clean_response_text(response_text)
-        questions = json.loads(response_text)
-
+        cleaned_text = clean_response_text(response_text)
+        questions = json.loads(cleaned_text)
+        
         if not isinstance(questions, list):
             questions = [questions]
 
-        # Validate and process questions
         validated_questions = []
         required_fields = {'question', 'answer', 'difficulty', 'type'}
 
@@ -353,49 +343,9 @@ def generate_interview_questions(prompt, num_questions):
                     q['id'] = i + 1
                 validated_questions.append(q)
 
-        if len(validated_questions) < num_questions:
-            logger.warning(f"⚠️ Only generated {len(validated_questions)} valid questions out of {num_questions} requested")
-            
-            # Try to generate additional questions if needed
-            missing_count = num_questions - len(validated_questions)
-            if missing_count > 0:
-                logger.info(f"Generating {missing_count} additional interview questions")
-                additional_prompt = f"""
-                Create exactly {missing_count} more interview questions about {clean_prompt}.
-                Different from these questions: {[q['question'] for q in validated_questions]}
-                
-                Use the same format as before.
-                """
-                try:
-                    additional_response = model.generate_content(
-                        contents=[{"role": "user", "parts": [{"text": additional_prompt}]}],
-                        generation_config=generation_config,
-                    )
-                    additional_text = get_response_content(additional_response)
-                    additional_text = clean_response_text(additional_text)
-                    additional_questions = json.loads(additional_text)
-                    
-                    if not isinstance(additional_questions, list):
-                        additional_questions = [additional_questions]
-                    
-                    # Validate additional questions
-                    for i, q in enumerate(additional_questions):
-                        if isinstance(q, dict) and all(k in q for k in required_fields):
-                            if 'id' not in q:
-                                q['id'] = len(validated_questions) + i + 1
-                            validated_questions.append(q)
-                            
-                            if len(validated_questions) >= num_questions:
-                                break
-                                
-                    logger.info(f"✅ Added {len(validated_questions) - (num_questions - missing_count)} more interview questions")
-                except Exception as add_err:
-                    logger.error(f"❌ Failed to generate additional interview questions: {str(add_err)}")
+        if not validated_questions or len(validated_questions) < num_questions:
+            raise ValueError(f"Only {len(validated_questions)} valid questions generated out of {num_questions}")
 
-        if not validated_questions:
-            raise ValueError("No valid questions generated")
-
-        # Trim to exact count requested
         validated_questions = validated_questions[:num_questions]
         
         logger.info(f"✅ Successfully generated {len(validated_questions)} interview questions")
@@ -403,39 +353,77 @@ def generate_interview_questions(prompt, num_questions):
 
     except Exception as e:
         logger.error(f"❌ Error generating interview questions: {str(e)}")
-        raise
+        logger.error(f"Stack trace: {traceback.format_exc()}")
+        raise ValueError(f"Failed to generate interview questions: {str(e)}")
 
 def clean_response_text(text):
     """Clean and format the response text."""
-    text = text.strip()
-    
-    # Remove markdown code blocks if present
-    if "```json" in text:
-        start = text.find("```json") + 7
-        end = text.find("```", start)
-        text = text[start:end].strip()
-    elif "```" in text:
-        if text.startswith('```') and text.endswith('```'):
-            text = text[3:-3].strip()
-        else:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if start > 3 and end > start:
-                text = text[start:end].strip()
-    
-    # Remove json prefix if present
-    if text.startswith('json'):
-        text = text[4:].strip()
-    
-    # Ensure the text is a valid JSON array
-    text = text.strip()
-    if not text.startswith('['):
-        text = '[' + text
-    if not text.endswith(']'):
-        text = text + ']'
+    try:
+        logger.debug(f"Raw text to clean: {text[:500]}...")
         
-    return text
+        # Remove any leading/trailing whitespace
+        text = text.strip()
+        
+        # First try to find JSON content within markdown blocks
+        json_patterns = [
+            r'```json\s*([\s\S]*?)\s*```',  # JSON code blocks
+            r'```\s*([\s\S]*?)\s*```',      # Any code blocks
+            r'\{[\s\S]*\}|\[[\s\S]*\]'      # Raw JSON objects/arrays
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, text, re.MULTILINE)
+            if matches:
+                # Try each match until we find valid JSON
+                for match in matches:
+                    try:
+                        cleaned = match.strip()
+                        if cleaned.startswith('json'):
+                            cleaned = cleaned[4:].strip()
+                        # Verify it's valid JSON
+                        json.loads(cleaned)
+                        logger.debug(f"Successfully cleaned JSON: {cleaned[:200]}...")
+                        return cleaned
+                    except json.JSONDecodeError:
+                        continue
+        
+        # If no valid JSON found in code blocks, try to clean the raw text
+        cleaned = text
+        # Remove common prefixes
+        for prefix in ['json', 'JSON:', 'Response:', 'Here are']:
+            if cleaned.lower().startswith(prefix.lower()):
+                cleaned = cleaned[len(prefix):].strip()
+        
+        # Ensure proper JSON structure
+        if not cleaned.startswith('['):
+            if cleaned.startswith('{'):
+                cleaned = f'[{cleaned}]'
+            else:
+                cleaned = f'[{cleaned}'
+        if not cleaned.endswith(']'):
+            cleaned = f'{cleaned}]'
+        
+        # Try to parse the cleaned text
+        try:
+            json.loads(cleaned)
+            logger.debug(f"Successfully cleaned raw text to JSON: {cleaned[:200]}...")
+            return cleaned
+        except json.JSONDecodeError:
+            # One last attempt: try to extract anything that looks like JSON
+            json_pattern = r'(\[[\s\S]*\]|\{[\s\S]*\})'
+            match = re.search(json_pattern, cleaned)
+            if match:
+                final_attempt = match.group(1)
+                json.loads(final_attempt)  # Validate it's proper JSON
+                return final_attempt
+            
+            raise ValueError("Could not find valid JSON in the response")
 
+    except Exception as e:
+        logger.error(f"Error cleaning response text: {str(e)}")
+        logger.error(f"Original text causing error: {text[:500]}...")
+        raise ValueError(f"Failed to clean response text: {str(e)}")
+    
 # API endpoint to generate MCQ questions
 @app.route('/api/panel/generate-question', methods=['POST'])
 def generate_mcq():
@@ -467,26 +455,50 @@ def generate_mcq():
 def generate_interview():
     try:
         data = request.get_json()
+        if not data:
+            raise ValueError("No data received")
+
         prompt = data.get('prompt', '').strip()
+        if not prompt:
+            raise ValueError("Prompt is required")
         
-        # Get number of questions (ensure within bounds 10-15)
         num_questions = int(data.get('num_questions', 10))
         num_questions = max(10, min(15, num_questions))
         
-        logger.info(f"Request to generate {num_questions} interview questions about: {prompt}")
+        logger.info(f"📝 Generating {num_questions} interview questions for: {prompt}")
 
-        questions = generate_interview_questions(prompt, num_questions)
-        
+        try:
+            questions = generate_interview_questions(prompt, num_questions)
+            
+            if not questions:
+                raise ValueError("No questions generated")
+
+            return jsonify({
+                "success": True,
+                "questions": questions,
+                "type": "interview",
+                "count": len(questions)
+            }), 200
+
+        except Exception as gen_error:
+            logger.error(f"Generation error: {str(gen_error)}")
+            return jsonify({
+                "success": False,
+                "error": "Failed to generate questions. Please try again."
+            }), 500
+
+    except ValueError as ve:
+        logger.error(f"Validation error: {str(ve)}")
         return jsonify({
-            "success": True,
-            "questions": questions,
-            "type": "interview",
-            "count": len(questions)
-        }), 200
-
+            "success": False,
+            "error": str(ve)
+        }), 400
     except Exception as e:
         logger.error(f"❌ Error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": "Internal server error"
+        }), 500
 
 # Test endpoint
 @app.route('/api/panel/test', methods=['GET'])

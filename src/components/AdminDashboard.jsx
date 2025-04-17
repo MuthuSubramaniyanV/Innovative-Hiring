@@ -28,7 +28,7 @@ const StatsCard = ({ title, value, colorClass }) => (
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const [isSidebarOpen, setSidebarOpen] = useState(false);
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState("users");
   const [usersList, setUsersList] = useState([]);
   

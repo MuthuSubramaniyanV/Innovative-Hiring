@@ -7,10 +7,11 @@ import LoginPage from "./components/Loginpage";
 import Candidateform from "./components/Candidateform";
 import AdminDashboard from "./components/AdminDashboard";
 import Registerform from "./components/Registerform";
-import JobList from "./components/joblist";
+import JobList from "./components/Joblist";
 import HrPostCreate from "./components/Hrpostcreate";
 import PanelDashboard from "./components/paneldashboard";
 import MCQPanelInterface from "./components/McqQuestion"; // Import MCQ Panel Interface
+import ApplyJob from "./components/ApplyJob"; // Import ApplyJob component
 
 const FullLayout = ({ children }) => (
   <>
@@ -68,10 +69,10 @@ const App = () => {
 
         {/* Candidate Form with Job Details */}
         <Route
-          path="/apply/:jobId"
+          path="/apply/:id"
           element={
             <NavOnlyLayout>
-              <Candidateform />
+              <ApplyJob />
             </NavOnlyLayout>
           }
         />

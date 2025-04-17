@@ -1,10 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 
-const MCQPanelInterface = ({ questions = [], prompt }) => {
-  // Remove the loading, error, and questions state since they're now passed as props
+const MCQPanelInterface = ({ questions, prompt, taskId }) => {
   const [selectedQuestions, setSelectedQuestions] = useState([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [fileName, setFileName] = useState('');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Add validation for taskId prop
+  useEffect(() => {
+    if (!taskId) {
+      toast.error("Task ID is missing");
+      console.error("Task ID is required but not provided");
+    }
+  }, [taskId]);
 
   useEffect(() => {
     // Load selected questions from localStorage
@@ -12,13 +23,14 @@ const MCQPanelInterface = ({ questions = [], prompt }) => {
     setSelectedQuestions(savedQuestions);
   }, []);
 
-  // Don't need to fetch questions again - they're already passed from the parent
-
   const handleSelectQuestion = (question) => {
     if (!selectedQuestions.some(q => q.question === question.question)) {
       const updatedSelections = [...selectedQuestions, question];
       setSelectedQuestions(updatedSelections);
       localStorage.setItem("selectedQuestions", JSON.stringify(updatedSelections));
+      toast.success('Question added to selection');
+    } else {
+      toast.error('This question is already selected');
     }
   };
 
@@ -26,12 +38,116 @@ const MCQPanelInterface = ({ questions = [], prompt }) => {
     const updatedSelections = selectedQuestions.filter((_, i) => i !== index);
     setSelectedQuestions(updatedSelections);
     localStorage.setItem("selectedQuestions", JSON.stringify(updatedSelections));
+    toast.success('Question removed from selection');
+  };
+
+  const handleSaveToDatabase = async () => {
+    if (!fileName.trim()) {
+      toast.error('Please enter a file name');
+      return;
+    }
+
+    if (!taskId) {
+      toast.error('Task ID is required');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const username = localStorage.getItem('username');
+      if (!username) {
+        toast.error('User information not found');
+        return;
+      }
+
+      // Format the MCQ questions to include required fields
+      const formattedQuestions = selectedQuestions.map(q => ({
+        question: q.question,
+        expected_answer: q.correctAnswer !== undefined ? 
+          q.options[q.correctAnswer] : 
+          q.answer || '',
+        options: q.options || [],
+        explanation: q.explanation || ''
+      }));
+
+      // Validate questions before sending
+      if (!formattedQuestions.length) {
+        toast.error('No questions selected');
+        return;
+      }
+
+      const requestData = {
+        question_title: fileName,
+        questions: formattedQuestions,
+        exam_type: 'MCQ',
+        created_by: username,
+        task_id: taskId // Ensure taskId is included
+      };
+
+      console.log('Sending request data:', requestData); // Debug log
+
+      const response = await axios.post(
+        'http://localhost:5000/api/panel/save-questions',
+        requestData,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("authToken")}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data.status === "success") {
+        toast.success('Questions saved successfully!');
+        setFileName('');
+        setSelectedQuestions([]);
+        localStorage.removeItem("selectedQuestions");
+        setShowSaveDialog(false);
+      }
+    } catch (error) {
+      console.error('Error saving questions:', error);
+      toast.error(error.response?.data?.message || 'Failed to save questions');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      const username = localStorage.getItem("username"); // Get username from localStorage
+      
+      const response = await axios.post(
+        "http://localhost:5000/api/save-selected-questions",
+        {
+          file_name: `MCQ_${prompt.substring(0, 30)}...`,
+          questions: questions,
+          created_by: username // Add this line
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("authToken")}`
+          }
+        }
+      );
+
+      if (response.data.status === "success") {
+        toast.success("Questions saved successfully!");
+      } else {
+        throw new Error(response.data.message || "Failed to save questions");
+      }
+    } catch (error) {
+      console.error("Error saving questions:", error);
+      toast.error(error.response?.data?.message || "Failed to save questions");
+    }
   };
 
   const handleCompleteSelection = () => {
-    toast.success('Selection completed!');
-    localStorage.removeItem("selectedQuestions");
-    setSelectedQuestions([]);
+    if (selectedQuestions.length === 0) {
+      toast.error('Please select at least one question');
+      return;
+    }
+    setShowSaveDialog(true);
   };
 
   if (!questions || questions.length === 0) {
@@ -121,10 +237,51 @@ const MCQPanelInterface = ({ questions = [], prompt }) => {
             onClick={handleCompleteSelection}
             className="mt-4 w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
           >
-            Complete Selection
+            Save Selected Questions
           </button>
         )}
       </div>
+
+      {/* Save Dialog Modal */}
+      {showSaveDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-lg w-96">
+            <h3 className="text-xl font-bold mb-4">Save Questions</h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                File Name
+              </label>
+              <input
+                type="text"
+                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                value={fileName}
+                onChange={(e) => setFileName(e.target.value)}
+                placeholder="Enter a name for this question set"
+                disabled={isSaving}
+              />
+            </div>
+            <div className="text-sm text-gray-600 mb-4">
+              {selectedQuestions.length} questions will be saved to the database.
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100"
+                disabled={isSaving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveToDatabase}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                disabled={isSaving}
+              >
+                {isSaving ? 'Saving...' : 'Save to Database'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

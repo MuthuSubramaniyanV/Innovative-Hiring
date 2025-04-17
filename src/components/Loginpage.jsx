@@ -40,7 +40,7 @@ const LoginPage = () => {
         localStorage.setItem("username", data.user.username);
         localStorage.setItem("email", data.user.email);
         localStorage.setItem("userRole", data.user.role);
-        
+        localStorage.setItem("panelMemberId", data.user.user_id);
         toast.success('Login successful! Redirecting...', { 
           duration: 3000, 
           position: 'top-center' 

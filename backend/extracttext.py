@@ -42,7 +42,7 @@ def get_db_connection():
 
 # Configure Google AI Studio
 # Configure Google AI Studio with actual API key
-genai.configure(api_key="AIzaSyBOq7h29whug3VVqn5hXaStTDLGTPdYoc4")
+genai.configure(api_key="AIzaSyCsOfL5IMZKu3-EGHzWHrKDOgqN9QvBdoI")
 
 
 # Extract text
@@ -98,25 +98,46 @@ def classify_candidate_level(resume_text):
 @app.route('/submit', methods=['POST'])
 def submit_candidate():
     conn = None
+    cursor = None
     temp_path = None
 
     try:
         logger.debug("Received submission request")
         
+        # Get and validate job_id first
+        job_id = request.form.get('job_id')
+        if not job_id:
+            logger.error("No job ID provided")
+            return jsonify({"error": "Job ID is required"}), 400
+
+        try:
+            job_id = int(job_id)
+        except ValueError:
+            logger.error(f"Invalid job ID format: {job_id}")
+            return jsonify({"error": "Invalid job ID format"}), 400
+
+        # Verify job exists
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id FROM post WHERE post_id = %s", (job_id,))
+        if not cursor.fetchone():
+            logger.error(f"Job ID {job_id} not found")
+            return jsonify({"error": "Invalid job ID - job not found"}), 404
+
+        # Process rest of the submission
+        name = request.form.get('name')
+        email = request.form.get('email')
+        phone = request.form.get('phone')
+        
+        if not all([name, email, phone]):
+            logger.error("Missing required fields")
+            return jsonify({"error": "Missing required fields"}), 400
+
         if 'resume' not in request.files:
             logger.error("No resume file provided")
             return jsonify({"error": "No resume file provided"}), 400
 
-        name = request.form.get('name')
-        email = request.form.get('email')
-        phone = request.form.get('phone')
         resume_file = request.files['resume']
-
-        logger.debug(f"Received data: Name={name}, Email={email}, Phone={phone}, File={resume_file.filename}")
-
-        if not all([name, email, phone, resume_file.filename]):
-            logger.error("Missing required fields")
-            return jsonify({"error": "Missing required fields"}), 400
 
         allowed_extensions = {'pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg'}
         if not allowed_file(resume_file.filename, allowed_extensions):
@@ -147,75 +168,58 @@ def submit_candidate():
         resume_json = {
             "extracted_text": resume_text,
             "file_name": filename,
-            
         }
 
         # Database connection and insertion
-        conn = get_db_connection()
-        if conn is None:
-            logger.error("Failed to connect to the database")
-            return jsonify({"error": "Database connection failed"}), 500
-
-        cursor = conn.cursor()
         query = """
             INSERT INTO candidate (
                 name, 
                 email, 
                 phone, 
                 resume, 
+                job_id,  
                 candidate_level,
                 progress,
                 selected
             )
             VALUES (
-                %s, %s, %s, %s, %s::candidate_level, 
+                %s, %s, %s, %s, %s, %s::candidate_level, 
                 'Applied'::progress, 
                 'Pending'::selected
             )
             RETURNING candidate_id
         """
         
-        # Add debug logging
-        logger.debug(f"Executing query with values: {name}, {email}, {phone}, {candidate_level}")
+        logger.debug(f"Executing query with values: {name}, {email}, {phone}, {job_id}, {candidate_level}")
         
         cursor.execute(
             query, 
             (
-                name, 
-                email, 
-                phone, 
-                json.dumps(resume_json), 
+                name,
+                email,
+                phone,
+                json.dumps(resume_json),
+                job_id,
                 candidate_level
             )
         )
         
         new_candidate_id = cursor.fetchone()[0]
         conn.commit()
-        cursor.close()
         
-        logger.debug(f"Data inserted successfully. Candidate ID: {new_candidate_id}")
-
         return jsonify({
             "success": True,
             "message": "Application submitted successfully!",
-            "candidate_level": candidate_level,
-            "candidate_id": new_candidate_id
+            "candidate_id": new_candidate_id,
+            "job_id": job_id
         }), 200
 
-    except psycopg2.Error as db_error:
-        logger.error(f"Database error: {str(db_error)}")
-        return jsonify({
-            "success": False,
-            "error": "Database error",
-            "details": str(db_error)
-        }), 500
     except Exception as e:
         logger.error(f"Error processing submission: {str(e)}")
-        logger.error(traceback.format_exc())
+        if conn:
+            conn.rollback()
         return jsonify({
-            "success": False,
-            "error": "Internal server error",
-            "details": str(e)
+            "error": str(e)
         }), 500
     finally:
         if cursor and not cursor.closed:
